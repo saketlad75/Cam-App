@@ -22,6 +22,7 @@ import java.text.SimpleDateFormat
 import java.util.Locale
 import android.content.ContentValues
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
@@ -39,12 +40,37 @@ class MainActivity : AppCompatActivity() {
     private lateinit var previewDialog: AlertDialog
     private lateinit var previewImage: ImageView
     private var isFlashEnabled = false
+    private lateinit var photoName: String
 
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+
+        val previewLayout = layoutInflater.inflate(R.layout.preview_layout, null)
+        previewImage = previewLayout.findViewById(R.id.previewImage)
+
+        val previewBuilder = AlertDialog.Builder(this)
+            .setView(previewLayout)
+            .setCancelable(false)
+            .setPositiveButton("Save") { _, _ ->
+                // Save the photo to the gallery
+                savePhotoToGallery(File(outputDirectory, photoName))
+                previewDialog.dismiss()
+            }
+            .setNegativeButton("Cancel") { _, _ ->
+                // Delete the temporary file and dismiss the preview
+                File(outputDirectory, photoName).delete()
+                previewDialog.dismiss()
+            }
+
+        previewDialog = previewBuilder.create()
+
+
+
+
+
         var takephoto: Button = findViewById(R.id.btnTakePhoto)
         var openGallery: Button = findViewById(R.id.btnOpenGallery)
         val toggleFlash: Button = findViewById(R.id.btnToggleFlash)
@@ -59,6 +85,7 @@ class MainActivity : AppCompatActivity() {
 
         if (allPermissionGranted()) {
             Toast.makeText(this, "We have Permission", Toast.LENGTH_SHORT).show()
+
             startCamera()
         } else {
             ActivityCompat.requestPermissions(
@@ -72,6 +99,9 @@ class MainActivity : AppCompatActivity() {
             //TODO:
             // Ensure that the camera is properly bound before taking a photo
             if (allPermissionGranted()) {
+                photoName =
+                    SimpleDateFormat(Constants.FILE_NAME_FORMAT, Locale.US).format(System.currentTimeMillis()) + ".jpg"
+                takePhoto()
                 takePhoto()
             } else {
                 Toast.makeText(this, "Permission not Granted", Toast.LENGTH_SHORT).show()
@@ -187,48 +217,31 @@ class MainActivity : AppCompatActivity() {
 
 
     private fun takePhoto() {
-        // Get a stable reference of the modifiable image capture use case
-        val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
-        val imageCapture = imageCapture ?: return
-        val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
-        val cameraProvider:ProcessCameraProvider = cameraProviderFuture.get()
-        val preview = Preview.Builder().build().also { mPreview ->
-            mPreview.setSurfaceProvider(binding.ViewFinder.surfaceProvider)
-        }
+        val photoFile = File(outputDirectory, photoName)
 
-        // Create time stamped name and MediaStore entry.
-        val name = SimpleDateFormat(Constants.FILE_NAME_FORMAT, Locale.US)
-            .format(System.currentTimeMillis())
-        val contentValues = ContentValues().apply {
-            put(MediaStore.MediaColumns.DISPLAY_NAME, name)
-            put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
-            if(Build.VERSION.SDK_INT > Build.VERSION_CODES.P) {
-                put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/CameraX-Image")
-            }
-        }
+        val outputOptions = ImageCapture.OutputFileOptions.Builder(photoFile).build()
 
-        // Create output options object which contains file + metadata
-        val outputOptions = ImageCapture.OutputFileOptions
-            .Builder(contentResolver,
-                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                contentValues)
-            .build()
-
-        // Set up image capture listener, which is triggered after photo has
-        // been taken
-        cameraProvider.bindToLifecycle(this, cameraSelector, preview, imageCapture)
-        imageCapture.takePicture(
+        // Ensure that UI-related operations are done on the main thread
+        imageCapture?.takePicture(
             outputOptions,
             ContextCompat.getMainExecutor(this),
             object : ImageCapture.OnImageSavedCallback {
-                override fun onError(exc: ImageCaptureException) {
-                    Log.e(TAG, "Photo capture failed: ${exc.message}", exc)
+                override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
+                    runOnUiThread {
+                        previewImage.setImageURI(Uri.fromFile(photoFile))
+                        previewDialog.show()
+                    }
                 }
 
-                override fun onImageSaved(output: ImageCapture.OutputFileResults){
-                    val msg = "Photo capture succeeded: ${output.savedUri}"
-                    Toast.makeText(baseContext, msg, Toast.LENGTH_SHORT).show()
-                    Log.d(TAG, msg)
+                override fun onError(exception: ImageCaptureException) {
+                    runOnUiThread {
+                        Log.e(Constants.tag, "OnError: ${exception.message}", exception)
+                        Toast.makeText(
+                            this@MainActivity,
+                            "Error capturing photo: ${exception.message}",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
                 }
             }
         )
