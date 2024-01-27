@@ -1,9 +1,8 @@
 package com.example.cam
 
-import android.app.Activity
+import android.content.ContentValues
 import android.content.ContentValues.TAG
 import android.content.pm.PackageManager
-
 import androidx.appcompat.app.AppCompatActivity
 import android.os.Bundle
 import android.util.Log
@@ -20,17 +19,27 @@ import com.example.cam.databinding.ActivityMainBinding
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Locale
-import android.content.ContentValues
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.drawable.BitmapDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import android.widget.ImageView
 import androidx.appcompat.app.AlertDialog
+import com.chaquo.python.Python
+import com.chaquo.python.android.AndroidPlatform
+import com.example.cam.ml.ModelAtmTripletSiameseV1
+import org.tensorflow.lite.support.tensorbuffer.TensorBuffer
+import java.io.ByteArrayOutputStream
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.IOException
 import java.io.OutputStream
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 
 class MainActivity : AppCompatActivity() {
 
@@ -41,12 +50,25 @@ class MainActivity : AppCompatActivity() {
     private lateinit var previewImage: ImageView
     private var isFlashEnabled = false
     private lateinit var photoName: String
+    lateinit var model: ModelAtmTripletSiameseV1
+    lateinit var drawable : BitmapDrawable
+    lateinit var bitmap: Bitmap
+    lateinit var imageString: String
+    lateinit var bmp: Bitmap
+
 
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+
+
+        if(!Python.isStarted()){
+            Python.start(AndroidPlatform(this))
+        }
+        //Creating python instance
+
 
         val previewLayout = layoutInflater.inflate(R.layout.preview_layout, null)
         previewImage = previewLayout.findViewById(R.id.previewImage)
@@ -56,7 +78,15 @@ class MainActivity : AppCompatActivity() {
             .setCancelable(false)
             .setPositiveButton("Save") { _, _ ->
                 // Save the photo to the gallery
-                savePhotoToGallery(File(outputDirectory, photoName))
+                //savePhotoToGallery(File(outputDirectory, photoName))
+                val bitmap = getBitmapFromImageView(previewLayout.findViewById(R.id.previewImage))
+                val processedBitmap = preprocessImageWithPythonScript(bitmap)
+                previewImage.setImageBitmap(processedBitmap)
+                // Save or perform further actions with the processed image if needed
+                saveProcessedPhoto(processedBitmap)
+                //savePhotoToGallery(File(outputDirectory,photoName))
+
+
                 previewDialog.dismiss()
             }
             .setNegativeButton("Cancel") { _, _ ->
@@ -102,7 +132,7 @@ class MainActivity : AppCompatActivity() {
                 photoName =
                     SimpleDateFormat(Constants.FILE_NAME_FORMAT, Locale.US).format(System.currentTimeMillis()) + ".jpg"
                 takePhoto()
-                takePhoto()
+
             } else {
                 Toast.makeText(this, "Permission not Granted", Toast.LENGTH_SHORT).show()
             }
@@ -111,7 +141,57 @@ class MainActivity : AppCompatActivity() {
         openGallery.setOnClickListener {
             openGallery()
         }
+
+
     }
+
+    private fun getBitmapFromImageView(imageView: ImageView): Bitmap? {
+        val drawable = imageView.drawable
+        if (drawable is BitmapDrawable) {
+            return drawable.bitmap
+        }
+        return null
+    }
+
+    private fun preprocessImageWithPythonScript(originalBitmap: Bitmap?): Bitmap {
+        var py = Python.getInstance()
+        // Convert the original bitmap to a base64-encoded string
+        val imageString = getStringImage(originalBitmap)
+
+        // Call the Python script with the base64-encoded image
+        val pyObject = py.getModule("myscript")
+        val obj = pyObject.callAttr("main", imageString)
+        val str = obj.toString()
+
+        // Decode the result from base64 and create a Bitmap
+        val data = android.util.Base64.decode(str, android.util.Base64.DEFAULT)
+        return BitmapFactory.decodeByteArray(data, 0, data.size)
+    }
+    // Inside your MainActivity class
+
+    // Function to save the processed image to the gallery
+    private fun saveProcessedPhoto(processedBitmap: Bitmap) {
+        // Save the processed image to the gallery using the same logic as before
+        val photoName =
+            SimpleDateFormat(Constants.FILE_NAME_FORMAT, Locale.US).format(System.currentTimeMillis()) + "_processed.jpg"
+        val outputDirectory = getoutputDirectory()
+
+        val processedPhotoFile = File(outputDirectory, photoName)
+
+        try {
+            val outputStream = FileOutputStream(processedPhotoFile)
+            processedBitmap.compress(Bitmap.CompressFormat.JPEG, 100, outputStream)
+            outputStream.flush()
+            outputStream.close()
+
+            // Save the processed photo to the gallery
+            savePhotoToGallery(processedPhotoFile)
+        } catch (e: IOException) {
+            e.printStackTrace()
+            Toast.makeText(this@MainActivity, "Error saving processed photo", Toast.LENGTH_SHORT).show()
+        }
+    }
+
 
 
     private fun getoutputDirectory(): File {
@@ -183,23 +263,20 @@ class MainActivity : AppCompatActivity() {
         cameraProviderFuture.addListener({
             val cameraProvider: ProcessCameraProvider = cameraProviderFuture.get()
 
+            // Unbind all use cases before binding new ones
+            cameraProvider.unbindAll()
+
             val preview = Preview.Builder().build().also { mPreview ->
                 mPreview.setSurfaceProvider(binding.ViewFinder.surfaceProvider)
             }
 
             imageCapture = ImageCapture.Builder()
                 .setFlashMode(
-                    (if (isFlashEnabled) {
-                        ImageCapture.FLASH_MODE_ON
-                        //model.close(////Toast.makeText(this,"Flash On",Toast.LENGTH_SHORT).show() as Int
-                    } else {
-                        ImageCapture.FLASH_MODE_OFF
-                    })
+                    if (isFlashEnabled) ImageCapture.FLASH_MODE_ON else ImageCapture.FLASH_MODE_OFF
                 )
                 .build()
 
             try {
-                cameraProvider.unbindAll()
                 val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
                 cameraProvider.bindToLifecycle(this, cameraSelector, preview, imageCapture)
             } catch (e: Exception) {
@@ -210,12 +287,81 @@ class MainActivity : AppCompatActivity() {
 
 
 
+
     private fun allPermissionGranted() = Constants.REQUIRED_PERMISSIONS.all  {
         ContextCompat.checkSelfPermission(baseContext,it) == PackageManager.PERMISSION_GRANTED
 
     }
 
 
+//    private fun takePhoto() {
+//
+//        val savedPhotoFile = File(outputDirectory, photoName)
+//        val savedPhotoBitmap = BitmapFactory.decodeFile(savedPhotoFile.absolutePath)
+//
+//        // Preprocess the image if needed (resize, normalize, etc.)
+//        val preprocessedBitmap = preprocessImage(savedPhotoBitmap)
+//
+//        // Create a ByteBuffer from the preprocessed image
+//        val byteBuffer = convertBitmapToByteBuffer(preprocessedBitmap)
+//
+//        // Create inputs for the TensorFlow Lite model
+//        val inputFeature0 = TensorBuffer.createFixedSize(intArrayOf(1, 225, 174, 3), DataType.FLOAT32)
+//        inputFeature0.loadBuffer(byteBuffer)
+//
+//        // Run model inference and get result
+//        val outputs = model.process(inputFeature0)
+//        val outputFeature0 = outputs.outputFeature0AsTensorBuffer
+//
+//        // Handle the results (e.g., display, extract information, etc.)
+//        handleModelResults(outputFeature0)
+//
+//        // Close the model to release resources
+//        // Note: You might want to keep the model open if you plan to perform multiple inferences
+//        model.close()
+//        val photoFile = File(outputDirectory, photoName)
+//
+//        val outputOptions = ImageCapture.OutputFileOptions.Builder(photoFile).build()
+//
+//        // Ensure that UI-related operations are done on the main thread
+//        imageCapture?.takePicture(
+//            outputOptions,
+//            ContextCompat.getMainExecutor(this),
+//            object : ImageCapture.OnImageSavedCallback {
+//                override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
+//                    runOnUiThread {
+//                        previewImage.setImageURI(Uri.fromFile(photoFile))
+//                        previewDialog.show()
+//                    }
+//                }
+//
+//                override fun onError(exception: ImageCaptureException) {
+//                    runOnUiThread {
+//                        Log.e(Constants.tag, "OnError: ${exception.message}", exception)
+//                        Toast.makeText(
+//                            this@MainActivity,
+//                            "Error capturing photo: ${exception.message}",
+//                            Toast.LENGTH_SHORT
+//                        ).show()
+//                    }
+//                }
+//            }
+//        )
+//    }
+
+
+    //Function to convert the image to bytearray
+    private fun getStringImage(Bitmap: Bitmap?): String {
+        var baos = ByteArrayOutputStream()
+        val photoFile = File(outputDirectory, photoName)
+        val bitmap = BitmapFactory.decodeFile(photoFile.absolutePath)
+        bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG,100,baos)
+        val imageBytes = baos.toByteArray()
+        var encodedImage = android.util.Base64.encodeToString(imageBytes,android.util.Base64.DEFAULT)
+
+
+        return encodedImage
+    }
     private fun takePhoto() {
         val photoFile = File(outputDirectory, photoName)
 
@@ -228,6 +374,12 @@ class MainActivity : AppCompatActivity() {
             object : ImageCapture.OnImageSavedCallback {
                 override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
                     runOnUiThread {
+
+                        val bitmap = BitmapFactory.decodeFile(photoFile.absolutePath)
+//
+                        // Pass the byte array to the Python script
+                       // passArrayToPythonScript(byteArray)
+
                         previewImage.setImageURI(Uri.fromFile(photoFile))
                         previewDialog.show()
                     }
@@ -246,6 +398,8 @@ class MainActivity : AppCompatActivity() {
             }
         )
     }
+
+
 
     private fun savePhotoToGallery(photoFile: File) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -287,4 +441,9 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+
+
+
+
 }
+
