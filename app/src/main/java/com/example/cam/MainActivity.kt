@@ -32,14 +32,11 @@ import androidx.appcompat.app.AlertDialog
 import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
 import com.example.cam.ml.ModelAtmTripletSiameseV1
-import org.tensorflow.lite.support.tensorbuffer.TensorBuffer
 import java.io.ByteArrayOutputStream
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
 import java.io.OutputStream
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 
 class MainActivity : AppCompatActivity() {
 
@@ -55,6 +52,7 @@ class MainActivity : AppCompatActivity() {
     lateinit var bitmap: Bitmap
     lateinit var imageString: String
     lateinit var bmp: Bitmap
+    lateinit var procView: ImageView
 
 
 
@@ -62,12 +60,15 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+        procView = procView.findViewById(R.id.processedImage)
 
 
         if(!Python.isStarted()){
             Python.start(AndroidPlatform(this))
         }
         //Creating python instance
+        val py = Python.getInstance()
+        val pyobj = py.getModule("script.py")
 
 
         val previewLayout = layoutInflater.inflate(R.layout.preview_layout, null)
@@ -78,12 +79,12 @@ class MainActivity : AppCompatActivity() {
             .setCancelable(false)
             .setPositiveButton("Save") { _, _ ->
                 // Save the photo to the gallery
-                //savePhotoToGallery(File(outputDirectory, photoName))
-                val bitmap = getBitmapFromImageView(previewLayout.findViewById(R.id.previewImage))
-                val processedBitmap = preprocessImageWithPythonScript(bitmap)
-                previewImage.setImageBitmap(processedBitmap)
+                savePhotoToGallery(File(outputDirectory, photoName))
+//                val bitmap = getBitmapFromImageView(previewLayout.findViewById(R.id.previewImage))
+//                val processedBitmap = preprocessImageWithPythonScript(bitmap)
+//                previewImage.setImageBitmap(processedBitmap)
                 // Save or perform further actions with the processed image if needed
-                saveProcessedPhoto(processedBitmap)
+//                saveProcessedPhoto(processedBitmap)
                 //savePhotoToGallery(File(outputDirectory,photoName))
 
 
@@ -96,9 +97,6 @@ class MainActivity : AppCompatActivity() {
             }
 
         previewDialog = previewBuilder.create()
-
-
-
 
 
         var takephoto: Button = findViewById(R.id.btnTakePhoto)
@@ -129,6 +127,7 @@ class MainActivity : AppCompatActivity() {
             //TODO:
             // Ensure that the camera is properly bound before taking a photo
             if (allPermissionGranted()) {
+
                 photoName =
                     SimpleDateFormat(Constants.FILE_NAME_FORMAT, Locale.US).format(System.currentTimeMillis()) + ".jpg"
                 takePhoto()
@@ -205,30 +204,6 @@ class MainActivity : AppCompatActivity() {
             mediaDir else filesDir
     }
 
-    //private fun takePhoto() {
- //       val photoFile = File(
-   //         outputDirectory,
-     //       SimpleDateFormat(Constants.FILE_NAME_FORMAT, Locale.getDefault()).format(System.currentTimeMillis()) + ".jpg"
-       // )
-
-        //val outputOptions = ImageCapture.OutputFileOptions.Builder(photoFile).build()
-
-       // imageCapture?.takePicture(
-         //   outputOptions,
-           // ContextCompat.getMainExecutor(this),
-            //object : ImageCapture.OnImageSavedCallback {
-              //  override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
-                //    val savedUri = Uri.fromFile(photoFile)
-                  //  val msg = "Photo Saved"
-                    //Toast.makeText(this@MainActivity, "$msg $savedUri", Toast.LENGTH_SHORT).show()
-               // }
-
-                //override fun onError(exception: ImageCaptureException) {
-                  //  Log.e(Constants.tag, "OnError: ${exception.message}", exception)
-                //}
-           // }
-        //)
-    //}
 
 
 
@@ -294,71 +269,18 @@ class MainActivity : AppCompatActivity() {
     }
 
 
-//    private fun takePhoto() {
-//
-//        val savedPhotoFile = File(outputDirectory, photoName)
-//        val savedPhotoBitmap = BitmapFactory.decodeFile(savedPhotoFile.absolutePath)
-//
-//        // Preprocess the image if needed (resize, normalize, etc.)
-//        val preprocessedBitmap = preprocessImage(savedPhotoBitmap)
-//
-//        // Create a ByteBuffer from the preprocessed image
-//        val byteBuffer = convertBitmapToByteBuffer(preprocessedBitmap)
-//
-//        // Create inputs for the TensorFlow Lite model
-//        val inputFeature0 = TensorBuffer.createFixedSize(intArrayOf(1, 225, 174, 3), DataType.FLOAT32)
-//        inputFeature0.loadBuffer(byteBuffer)
-//
-//        // Run model inference and get result
-//        val outputs = model.process(inputFeature0)
-//        val outputFeature0 = outputs.outputFeature0AsTensorBuffer
-//
-//        // Handle the results (e.g., display, extract information, etc.)
-//        handleModelResults(outputFeature0)
-//
-//        // Close the model to release resources
-//        // Note: You might want to keep the model open if you plan to perform multiple inferences
-//        model.close()
-//        val photoFile = File(outputDirectory, photoName)
-//
-//        val outputOptions = ImageCapture.OutputFileOptions.Builder(photoFile).build()
-//
-//        // Ensure that UI-related operations are done on the main thread
-//        imageCapture?.takePicture(
-//            outputOptions,
-//            ContextCompat.getMainExecutor(this),
-//            object : ImageCapture.OnImageSavedCallback {
-//                override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
-//                    runOnUiThread {
-//                        previewImage.setImageURI(Uri.fromFile(photoFile))
-//                        previewDialog.show()
-//                    }
-//                }
-//
-//                override fun onError(exception: ImageCaptureException) {
-//                    runOnUiThread {
-//                        Log.e(Constants.tag, "OnError: ${exception.message}", exception)
-//                        Toast.makeText(
-//                            this@MainActivity,
-//                            "Error capturing photo: ${exception.message}",
-//                            Toast.LENGTH_SHORT
-//                        ).show()
-//                    }
-//                }
-//            }
-//        )
-//    }
 
 
     //Function to convert the image to bytearray
-    private fun getStringImage(Bitmap: Bitmap?): String {
-        var baos = ByteArrayOutputStream()
-        val photoFile = File(outputDirectory, photoName)
-        val bitmap = BitmapFactory.decodeFile(photoFile.absolutePath)
-        bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG,100,baos)
-        val imageBytes = baos.toByteArray()
-        var encodedImage = android.util.Base64.encodeToString(imageBytes,android.util.Base64.DEFAULT)
+    private fun getStringImage(bitmapDrawable: BitmapDrawable): String {
+        val bitmap = bitmapDrawable.bitmap
 
+        // Convert the Bitmap to a byte array
+        val byteArrayOutputStream = ByteArrayOutputStream()
+        bitmap.compress(Bitmap.CompressFormat.JPEG, 100, byteArrayOutputStream)
+        val byteArray = byteArrayOutputStream.toByteArray()
+
+        var encodedImage = android.util.Base64.encodeToString(byteArray,android.util.Base64.DEFAULT)
 
         return encodedImage
     }
@@ -376,6 +298,12 @@ class MainActivity : AppCompatActivity() {
                     runOnUiThread {
 
                         val bitmap = BitmapFactory.decodeFile(photoFile.absolutePath)
+                        val bitmapDrawable = BitmapDrawable(resources, bitmap)
+                        drawable = bitmapDrawable
+                        imageString = getStringImage(drawable)
+                        val py = Python.getInstance()
+                        val pyo = py.getModule("script.py")
+                        val obj = pyo.callAttr("main",imageString)
 //
                         // Pass the byte array to the Python script
                        // passArrayToPythonScript(byteArray)

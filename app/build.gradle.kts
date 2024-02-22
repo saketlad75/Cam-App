@@ -49,15 +49,15 @@ android {
 chaquopy {
     defaultConfig {
         version="3.8"
-        pip{
-            install("opencv-contrib-python-headless")
-            install ("scikit-learn")
-            install("pillow")
-            install ("numpy")// Also used in Java API demo
-            install ("scipy")
-            install ("fingerprint-feature-extractor")
-            install ("fingerprint_enhancer")
-        }
+//        pip{
+//            install("opencv-contrib-python-headless")
+//            install ("scikit-learn")
+//            install("pillow")
+//            install ("numpy")// Also used in Java API demo
+//            install ("scipy")
+//            install ("fingerprint-feature-extractor")
+//            install ("fingerprint_enhancer")
+//        }
         pyc {
             src = false
         }
